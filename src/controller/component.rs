@@ -309,7 +309,7 @@ impl EditorCam {
             cameras.iter_mut()
         {
             let dt = time.delta();
-            camera_controller
+            let new_transform = camera_controller
                 .update_transform_and_projection(camera, transform, projection, &mut event, dt);
         }
     }
@@ -318,11 +318,14 @@ impl EditorCam {
     pub fn update_transform_and_projection(
         &mut self,
         camera: &Camera,
-        cam_transform: &mut Transform,
+        _cam_transform: &mut Transform,
         projection: &mut Projection,
         redraw: &mut EventWriter<RequestRedraw>,
         delta_time: Duration,
-    ) {
+    ) -> () {
+        //let mut cam_transform = Transform::IDENTITY;
+        let mut cam_translation = DVec3::ZERO;
+        let mut cam_rotation = DQuat::IDENTITY;
         let (anchor, orbit, pan, zoom) = match &mut self.current_motion {
             CurrentMotion::Stationary => return,
             CurrentMotion::Momentum {
@@ -531,9 +534,11 @@ impl EditorCam {
 
                     match [pitch == DQuat::IDENTITY, yaw == DQuat::IDENTITY] {
                         [true, true] => (),
-                        [true, false] => rotate_around(cam_transform, anchor_world, yaw),
-                        [false, true] => rotate_around(cam_transform, anchor_world, pitch),
-                        [false, false] => rotate_around(cam_transform, anchor_world, yaw * pitch),
+                        [true, false] => rotate_around(&mut cam_transform, anchor_world, yaw),
+                        [false, true] => rotate_around(&mut cam_transform, anchor_world, pitch),
+                        [false, false] => {
+                            rotate_around(&mut cam_transform, anchor_world, yaw * pitch)
+                        }
                     };
 
                     let how_upright = cam_transform.up().angle_between(up).abs();
@@ -547,12 +552,13 @@ impl EditorCam {
                 OrbitConstraint::Free => {
                     let rotation =
                         DQuat::from_axis_angle(orbit_axis_world, orbit.length() * orbit_multiplier);
-                    rotate_around(cam_transform, anchor_world, rotation);
+                    rotate_around(&mut cam_transform, anchor_world, rotation);
                 }
             }
         }
 
         self.last_anchor_depth = anchor.z;
+        *_cam_transform = _cam_transform.mul_transform(cam_transform);
     }
 
     /// Compute the world space size of a pixel at the anchor.
