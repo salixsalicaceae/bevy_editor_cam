@@ -7,7 +7,7 @@ use std::{
 
 use bevy_ecs::prelude::*;
 use bevy_log::prelude::*;
-use bevy_math::{prelude::*, DMat4, DQuat, DVec2, DVec3};
+use bevy_math::{prelude::*, DMat3, DMat4, DQuat, DVec2, DVec3};
 use bevy_platform::time::Instant;
 use bevy_reflect::prelude::*;
 use bevy_render::prelude::*;
@@ -301,11 +301,17 @@ impl EditorCam {
 
     /// Called once every frame to compute motions and update the transforms of all [`EditorCam`]s
     pub fn update_camera_positions(
-        mut cameras: Query<(&mut EditorCam, &Camera, &mut Transform, &mut Projection)>,
+        mut cameras: Query<(
+            Entity,
+            &mut EditorCam,
+            &Camera,
+            &mut Transform,
+            &mut Projection,
+        )>,
         mut event: EventWriter<RequestRedraw>,
         time: Res<Time>,
     ) {
-        for (mut camera_controller, camera, ref mut transform, ref mut projection) in
+        for (entity, mut camera_controller, camera, ref mut transform, ref mut projection) in
             cameras.iter_mut()
         {
             let dt = time.delta();
@@ -473,31 +479,37 @@ impl EditorCam {
             *anchor += zoom_translation_view_space;
         }
 
-        cam_transform.translation += (cam_transform.rotation.as_dquat()
-            * (pan_translation_view_space + zoom_translation_view_space))
-            .as_vec3();
+        cam_translation +=
+            cam_rotation * (pan_translation_view_space + zoom_translation_view_space);
 
         *anchor -= pan_translation_view_space + zoom_translation_view_space;
 
         let orbit = orbit * DVec2::new(-1.0, 1.0);
-        let anchor_world = cam_transform
-            .compute_matrix()
-            .as_dmat4()
+        let anchor_world = DMat4::from_rotation_translation(cam_rotation, cam_translation)
             .transform_point3(*anchor);
         let orbit_dir = orbit.normalize().extend(0.0);
-        let orbit_axis_world = cam_transform
-            .rotation
-            .as_dquat()
+        let orbit_axis_world = cam_rotation
             .mul_vec3(orbit_dir.cross(DVec3::NEG_Z).normalize())
             .normalize();
 
-        let rotate_around = |transform: &mut Transform, point: DVec3, rotation: DQuat| {
+        let rotate_around = |cam_translation: &mut DVec3,
+                             cam_rotation: &mut DQuat,
+                             point: DVec3,
+                             rotation: DQuat| {
             // Following lines are f64 versions of Transform::rotate_around
-            transform.translation =
-                (point + rotation * (transform.translation.as_dvec3() - point)).as_vec3();
-            transform.rotation = (rotation * transform.rotation.as_dquat())
-                .as_quat()
-                .normalize();
+            *cam_translation = point + rotation * (*cam_translation - point);
+            *cam_rotation = (rotation * *cam_rotation).normalize();
+        };
+
+        let look_to = |cam_rotation: &mut DQuat, direction: DVec3, up: DVec3| {
+            // Following lines are f64 versions of Transform::look_to
+            let back = -direction;
+            let right = up
+                .cross(back)
+                .try_normalize()
+                .unwrap_or_else(|| up.any_orthogonal_vector());
+            let up = back.cross(right);
+            *cam_rotation = DQuat::from_mat3(&DMat3::from_cols(right, up, back))
         };
 
         let orbit_multiplier = 0.005;
@@ -506,9 +518,9 @@ impl EditorCam {
                 OrbitConstraint::Fixed { up, can_pass_tdc } => {
                     let epsilon = 1e-3;
                     let motion_threshold = 1e-5;
-
-                    let angle_to_bdc = cam_transform.forward().angle_between(up) as f64;
-                    let angle_to_tdc = cam_transform.forward().angle_between(-up) as f64;
+                    let cam_forward = cam_rotation * DVec3::NEG_Z;
+                    let angle_to_bdc = cam_forward.angle_between(up.as_dvec3());
+                    let angle_to_tdc = cam_forward.angle_between(-up.as_dvec3());
                     let pitch_angle = {
                         let desired_rotation = orbit.y * orbit_multiplier;
                         if can_pass_tdc {
@@ -522,7 +534,8 @@ impl EditorCam {
                     let pitch = if pitch_angle.abs() <= motion_threshold {
                         DQuat::IDENTITY
                     } else {
-                        DQuat::from_axis_angle(cam_transform.left().as_dvec3(), pitch_angle)
+                        let cam_left = cam_rotation * DVec3::NEG_X;
+                        DQuat::from_axis_angle(cam_left, pitch_angle)
                     };
 
                     let yaw_angle = orbit.x * orbit_multiplier;
@@ -534,30 +547,50 @@ impl EditorCam {
 
                     match [pitch == DQuat::IDENTITY, yaw == DQuat::IDENTITY] {
                         [true, true] => (),
-                        [true, false] => rotate_around(&mut cam_transform, anchor_world, yaw),
-                        [false, true] => rotate_around(&mut cam_transform, anchor_world, pitch),
-                        [false, false] => {
-                            rotate_around(&mut cam_transform, anchor_world, yaw * pitch)
-                        }
+                        [true, false] => rotate_around(
+                            &mut cam_translation,
+                            &mut cam_rotation,
+                            anchor_world,
+                            yaw,
+                        ),
+                        [false, true] => rotate_around(
+                            &mut cam_translation,
+                            &mut cam_rotation,
+                            anchor_world,
+                            pitch,
+                        ),
+                        [false, false] => rotate_around(
+                            &mut cam_translation,
+                            &mut cam_rotation,
+                            anchor_world,
+                            yaw * pitch,
+                        ),
                     };
-
-                    let how_upright = cam_transform.up().angle_between(up).abs();
+                    let cam_up = cam_rotation * DVec3::Y;
+                    let how_upright = cam_up.angle_between(up.as_dvec3()).abs() as f32;
                     // Orient the camera so up always points up (roll).
                     if how_upright > epsilon && how_upright < FRAC_PI_2 - epsilon {
-                        cam_transform.look_to(cam_transform.forward(), up);
+                        look_to(&mut cam_rotation, cam_forward, up.as_dvec3());
                     } else if how_upright > FRAC_PI_2 + epsilon && how_upright < PI - epsilon {
-                        cam_transform.look_to(cam_transform.forward(), -up);
+                        look_to(&mut cam_rotation, cam_forward, -up.as_dvec3());
                     }
                 }
                 OrbitConstraint::Free => {
                     let rotation =
                         DQuat::from_axis_angle(orbit_axis_world, orbit.length() * orbit_multiplier);
-                    rotate_around(&mut cam_transform, anchor_world, rotation);
+                    rotate_around(
+                        &mut cam_translation,
+                        &mut cam_rotation,
+                        anchor_world,
+                        rotation,
+                    );
                 }
             }
         }
 
         self.last_anchor_depth = anchor.z;
+        let cam_transform = Transform::from_translation(cam_translation.as_vec3())
+            .with_rotation(cam_rotation.as_quat());
         *_cam_transform = _cam_transform.mul_transform(cam_transform);
     }
 
