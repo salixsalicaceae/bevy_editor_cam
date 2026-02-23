@@ -12,7 +12,6 @@ use bevy_math::{prelude::*, DQuat, DVec3};
 use bevy_platform::{collections::HashMap, time::Instant};
 use bevy_reflect::prelude::*;
 use bevy_render::{camera::ScalingMode, prelude::*};
-use bevy_transform::prelude::*;
 use bevy_window::RequestRedraw;
 
 use crate::prelude::{motion::CurrentMotion, CustomReadWrite, EditorCam, EnabledMotion};
@@ -136,17 +135,13 @@ impl DollyZoomTrigger {
                 zoom: false,
             };
 
-            let mut camera_entities = camera_set.p1();
-            let mut camera_entity = camera_entities.get_mut(event.camera).unwrap();
+            let mut camera_muts = camera_set.p1();
+            let mut camera_mut = camera_muts.get_mut(event.camera).unwrap();
             if let Some(ref read_write) = read_write {
-                let CustomReadWrite((_, apply_delta)) = &**read_write;
-                apply_delta(&mut camera_entity, delta_translation, DQuat::IDENTITY);
+                let CustomReadWrite { apply_delta, .. } = &**read_write;
+                apply_delta(&mut camera_mut, delta_translation, DQuat::IDENTITY);
             } else {
-                EditorCam::default_apply_delta(
-                    &mut camera_entity,
-                    delta_translation,
-                    DQuat::IDENTITY,
-                );
+                EditorCam::default_apply_delta(&mut camera_mut, delta_translation, DQuat::IDENTITY);
             }
         }
     }
@@ -263,17 +258,13 @@ impl DollyZoom {
             }
             redraw.write(RequestRedraw);
 
-            let mut camera_entities = camera_set.p1();
-            let mut camera_entity = camera_entities.get_mut(*camera_entity).unwrap();
+            let mut camera_muts = camera_set.p1();
+            let mut camera_mut = camera_muts.get_mut(*camera_entity).unwrap();
             if let Some(ref read_write) = read_write {
-                let CustomReadWrite((_, apply_delta)) = &**read_write;
-                apply_delta(&mut camera_entity, delta_translation, DQuat::IDENTITY);
+                let CustomReadWrite { apply_delta, .. } = &**read_write;
+                apply_delta(&mut camera_mut, delta_translation, DQuat::IDENTITY);
             } else {
-                EditorCam::default_apply_delta(
-                    &mut camera_entity,
-                    delta_translation,
-                    DQuat::IDENTITY,
-                );
+                EditorCam::default_apply_delta(&mut camera_mut, delta_translation, DQuat::IDENTITY);
             }
         }
         state.map.retain(|_, v| !v.complete);

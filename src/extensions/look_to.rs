@@ -5,7 +5,7 @@ use std::{f32::consts::PI, time::Duration};
 
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
-use bevy_math::{prelude::*, DQuat, DVec3};
+use bevy_math::{prelude::*, DAffine3, DQuat, DVec3};
 use bevy_platform::{collections::HashMap, time::Instant};
 use bevy_reflect::prelude::*;
 use bevy_transform::prelude::*;
@@ -52,7 +52,7 @@ impl LookToTrigger {
     pub fn auto_snap_up_direction(
         facing: Dir3,
         cam_entity: Entity,
-        cam_transform: &Transform,
+        cam_rotation: &DQuat,
         cam_editor: &EditorCam,
     ) -> Self {
         const EPSILON: f32 = 0.01;
@@ -66,7 +66,7 @@ impl LookToTrigger {
         });
 
         let up = constraint.unwrap_or_else(|| {
-            let current = cam_transform.rotation;
+            let current = cam_rotation.as_quat();
             let options = [
                 Vec3::X,
                 Vec3::NEG_X,
@@ -96,30 +96,47 @@ impl LookToTrigger {
     fn receive(
         mut events: EventReader<Self>,
         mut state: ResMut<LookTo>,
-        mut cameras: Query<(&mut EditorCam, &Transform)>,
+        mut camera_set: ParamSet<(Query<&mut EditorCam>, Query<EntityRef, With<EditorCam>>)>,
         mut redraw: EventWriter<RequestRedraw>,
+        read_write: Option<Res<CustomReadWrite>>,
     ) {
         for event in events.read() {
-            let Ok((mut controller, transform)) = cameras.get_mut(event.camera) else {
+            let camera_refs = camera_set.p1();
+            let Some((_, camera_rotation)) = (if let Ok(camera_ref) = camera_refs.get(event.camera)
+            {
+                if let Some(ref read_write) = read_write {
+                    let CustomReadWrite { read_transform, .. } = &**read_write;
+                    read_transform(&camera_ref)
+                } else {
+                    EditorCam::default_read_transform(&camera_ref)
+                }
+            } else {
+                None
+            }) else {
+                continue;
+            };
+            let mut cameras = camera_set.p0();
+            let Ok(mut controller) = cameras.get_mut(event.camera) else {
                 continue;
             };
             redraw.write(RequestRedraw);
-
+            let camera_forward = Dir3::new_unchecked((camera_rotation * DVec3::NEG_Z).as_vec3());
+            let camera_up = Dir3::new_unchecked((camera_rotation * DVec3::Y).as_vec3());
             state
                 .map
                 .entry(event.camera)
                 .and_modify(|e| {
                     e.start = Instant::now();
-                    e.initial_facing_direction = transform.forward();
-                    e.initial_up_direction = transform.up();
+                    e.initial_facing_direction = camera_forward;
+                    e.initial_up_direction = camera_up;
                     e.target_facing_direction = event.target_facing_direction;
                     e.target_up_direction = event.target_up_direction;
                     e.complete = false;
                 })
                 .or_insert(LookToEntry {
                     start: Instant::now(),
-                    initial_facing_direction: transform.forward(),
-                    initial_up_direction: transform.up(),
+                    initial_facing_direction: camera_forward,
+                    initial_up_direction: camera_up,
                     target_facing_direction: event.target_facing_direction,
                     target_up_direction: event.target_up_direction,
                     complete: false,
@@ -165,8 +182,13 @@ impl Default for LookTo {
 impl LookTo {
     fn update(
         mut state: ResMut<Self>,
-        mut cameras: Query<(&mut Transform, &EditorCam)>,
+        mut camera_set: ParamSet<(
+            Query<&mut EditorCam>,
+            Query<EntityRef, With<EditorCam>>,
+            Query<EntityMut, With<EditorCam>>,
+        )>,
         mut redraw: EventWriter<RequestRedraw>,
+        read_write: Option<Res<CustomReadWrite>>,
     ) {
         let animation_duration = state.animation_duration;
         let animation_curve = state.animation_curve;
@@ -182,7 +204,23 @@ impl LookTo {
             },
         ) in state.map.iter_mut()
         {
-            let Ok((mut transform, controller)) = cameras.get_mut(*camera) else {
+            let camera_refs = camera_set.p1();
+            let Some((mut camera_translation, mut camera_rotation)) =
+                (if let Ok(camera_ref) = camera_refs.get(*camera) {
+                    if let Some(ref read_write) = read_write {
+                        let CustomReadWrite { read_transform, .. } = &**read_write;
+                        read_transform(&camera_ref)
+                    } else {
+                        EditorCam::default_read_transform(&camera_ref)
+                    }
+                } else {
+                    None
+                })
+            else {
+                continue;
+            };
+            let mut cameras = camera_set.p0();
+            let Ok(controller) = cameras.get_mut(*camera) else {
                 *complete = true;
                 continue;
             };
@@ -190,13 +228,13 @@ impl LookTo {
                 (start.elapsed().as_secs_f32() / animation_duration.as_secs_f32()).clamp(0.0, 1.0);
             let progress = animation_curve.ease(progress_t);
 
-            let rotate_around = |transform: &mut Transform, point: DVec3, rotation: DQuat| {
+            let rotate_around = |trans_translation: &mut DVec3,
+                                 trans_rotation: &mut DQuat,
+                                 point: DVec3,
+                                 rotation: DQuat| {
                 // Following lines are f64 versions of Transform::rotate_around
-                transform.translation =
-                    (point + rotation * (transform.translation.as_dvec3() - point)).as_vec3();
-                transform.rotation = (rotation * transform.rotation.as_dquat())
-                    .as_quat()
-                    .normalize();
+                *trans_translation = point + rotation * (*trans_translation - point);
+                *trans_rotation = (rotation * *trans_rotation).normalize();
             };
 
             let anchor_view_space = controller.anchor_view_space().unwrap_or(DVec3::new(
@@ -206,8 +244,8 @@ impl LookTo {
             ));
 
             let anchor_world = {
-                let (r, t) = (transform.rotation, transform.translation);
-                r.as_dquat() * anchor_view_space + t.as_dvec3()
+                let (r, t) = (camera_rotation, camera_translation);
+                r * anchor_view_space + t
             };
 
             let rot_init = Transform::default()
@@ -218,11 +256,32 @@ impl LookTo {
                 .rotation;
 
             let rot_next = rot_init.slerp(rot_target, progress);
-            let rot_last = transform.rotation;
-            let rot_delta = rot_next * rot_last.inverse();
+            let rot_last = camera_rotation;
+            let rot_delta = rot_next * rot_last.inverse().as_quat();
 
-            rotate_around(&mut transform, anchor_world, rot_delta.as_dquat());
+            let original_translation = camera_translation;
+            let original_rotation = camera_rotation;
+            rotate_around(
+                &mut camera_translation,
+                &mut camera_rotation,
+                anchor_world,
+                rot_delta.as_dquat(),
+            );
+            let (_, delta_rotation, delta_translation) = {
+                let original =
+                    DAffine3::from_rotation_translation(original_rotation, original_translation);
+                let new = DAffine3::from_rotation_translation(camera_rotation, camera_translation);
+                (original.inverse() * new).to_scale_rotation_translation()
+            };
 
+            let mut camera_muts = camera_set.p2();
+            let mut camera_mut = camera_muts.get_mut(*camera).unwrap();
+            if let Some(ref read_write) = read_write {
+                let CustomReadWrite { apply_delta, .. } = &**read_write;
+                apply_delta(&mut camera_mut, delta_translation, delta_rotation);
+            } else {
+                EditorCam::default_apply_delta(&mut camera_mut, delta_translation, delta_rotation);
+            }
             if progress_t >= 1.0 {
                 *complete = true;
             }

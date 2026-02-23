@@ -121,7 +121,7 @@ fn toggle_constraint(
                 look_to.write(LookToTrigger::auto_snap_up_direction(
                     transform.forward(),
                     entity,
-                    transform,
+                    &transform.rotation.as_dquat(),
                     editor.as_ref(),
                 ));
             }
@@ -139,7 +139,7 @@ fn switch_direction(
         look_to.write(LookToTrigger::auto_snap_up_direction(
             Dir3::X,
             camera,
-            transform,
+            &transform.rotation.as_dquat(),
             editor,
         ));
     }
@@ -147,7 +147,7 @@ fn switch_direction(
         look_to.write(LookToTrigger::auto_snap_up_direction(
             Dir3::Z,
             camera,
-            transform,
+            &transform.rotation.as_dquat(),
             editor,
         ));
     }
@@ -155,7 +155,7 @@ fn switch_direction(
         look_to.write(LookToTrigger::auto_snap_up_direction(
             Dir3::NEG_X,
             camera,
-            transform,
+            &transform.rotation.as_dquat(),
             editor,
         ));
     }
@@ -163,7 +163,7 @@ fn switch_direction(
         look_to.write(LookToTrigger::auto_snap_up_direction(
             Dir3::NEG_Z,
             camera,
-            transform,
+            &transform.rotation.as_dquat(),
             editor,
         ));
     }
@@ -171,7 +171,7 @@ fn switch_direction(
         look_to.write(LookToTrigger::auto_snap_up_direction(
             Dir3::Y,
             camera,
-            transform,
+            &transform.rotation.as_dquat(),
             editor,
         ));
     }
@@ -179,7 +179,7 @@ fn switch_direction(
         look_to.write(LookToTrigger::auto_snap_up_direction(
             Dir3::NEG_Y,
             camera,
-            transform,
+            &transform.rotation.as_dquat(),
             editor,
         ));
     }

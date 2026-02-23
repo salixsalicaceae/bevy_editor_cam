@@ -5,7 +5,6 @@ use bevy_math::{DQuat, DVec3};
 use bevy_platform::collections::HashMap;
 use bevy_reflect::prelude::*;
 use bevy_render::prelude::*;
-use bevy_transform::prelude::*;
 
 use crate::prelude::*;
 
@@ -129,7 +128,7 @@ pub fn update_orthographic(
     for mut entity_mut in camera_set.p1() {
         if let Some((delta_translation, delta_rotation)) = transform_deltas.get(&entity_mut.id()) {
             if let Some(ref read_write) = read_write {
-                let CustomReadWrite((_, apply_delta)) = &**read_write;
+                let CustomReadWrite { apply_delta, .. } = &**read_write;
                 apply_delta(&mut entity_mut, *delta_translation, *delta_rotation);
             } else {
                 EditorCam::default_apply_delta(

@@ -79,17 +79,17 @@ pub struct EditorCam {
     /// overriding motion.
     pub current_motion: CurrentMotion,
 }
-#[derive(Resource, bevy_derive::Deref)]
 
 /// Optional resource that holds a function for how ['EditorCam'] applies its transform changes.
 /// The intended usage is for situations where a different transform system than Bevy's ['Transform'] component is being used
 /// When this resource is not present, the behavior falls back to a default that uses Bevy's ['Transform'].
-pub struct CustomReadWrite(
-    pub  (
-        Box<dyn Fn(&EntityRef) -> (DVec3, DQuat) + Send + Sync>,
-        Box<dyn Fn(&mut EntityMut, DVec3, DQuat) + Send + Sync>,
-    ),
-);
+#[derive(Resource)]
+pub struct CustomReadWrite {
+    /// Function for reading transform info from an entity.
+    pub read_transform: Box<dyn Fn(&EntityRef) -> Option<(DVec3, DQuat)> + Send + Sync>,
+    /// Function for applying a delta to an entity's transform.
+    pub apply_delta: Box<dyn Fn(&mut EntityMut, DVec3, DQuat) + Send + Sync>,
+}
 impl Default for EditorCam {
     fn default() -> Self {
         EditorCam {
@@ -335,7 +335,7 @@ impl EditorCam {
                 transform_deltas.get(&entity_mut.id())
             {
                 if let Some(ref read_write) = read_write {
-                    let CustomReadWrite((_, apply_delta)) = &**read_write;
+                    let CustomReadWrite { apply_delta, .. } = &**read_write;
                     apply_delta(&mut entity_mut, *delta_translation, *delta_rotation);
                 } else {
                     Self::default_apply_delta(&mut entity_mut, *delta_translation, *delta_rotation);
@@ -646,6 +646,18 @@ impl EditorCam {
         let delta_transform = Transform::from_translation(delta_translation.as_vec3())
             .with_rotation(delta_rotation.as_quat());
         *cam_transform = cam_transform.mul_transform(delta_transform);
+    }
+    /// Default fallback for reading transform information from the [`EditorCam`]'s entity.
+    /// Uses Bevy's base ['Transform'] type.
+    pub fn default_read_transform(entity: &EntityRef) -> Option<(DVec3, DQuat)> {
+        let Some(cam_transform) = entity.get::<Transform>() else {
+            error!("Unable to retrieve Transform from EditorCam entity.");
+            return None;
+        };
+        Some((
+            cam_transform.translation.as_dvec3(),
+            cam_transform.rotation.as_dquat(),
+        ))
     }
 }
 
