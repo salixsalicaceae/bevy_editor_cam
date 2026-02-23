@@ -15,7 +15,7 @@ use bevy_render::{camera::ScalingMode, prelude::*};
 use bevy_transform::prelude::*;
 use bevy_window::RequestRedraw;
 
-use crate::prelude::{motion::CurrentMotion, CustomApplyDelta, EditorCam, EnabledMotion};
+use crate::prelude::{motion::CurrentMotion, CustomReadWrite, EditorCam, EnabledMotion};
 
 /// See the [module](self) docs.
 pub struct DollyZoomPlugin;
@@ -54,7 +54,7 @@ impl DollyZoomTrigger {
             Query<(&Camera, &mut Projection, &mut EditorCam)>,
             Query<EntityMut, With<EditorCam>>,
         )>,
-        apply_delta: Option<Res<CustomApplyDelta>>,
+        read_write: Option<Res<CustomReadWrite>>,
         mut redraw: EventWriter<RequestRedraw>,
     ) {
         for event in events.read() {
@@ -138,7 +138,8 @@ impl DollyZoomTrigger {
 
             let mut camera_entities = camera_set.p1();
             let mut camera_entity = camera_entities.get_mut(event.camera).unwrap();
-            if let Some(ref apply_delta) = apply_delta {
+            if let Some(ref read_write) = read_write {
+                let CustomReadWrite((_, apply_delta)) = &**read_write;
                 apply_delta(&mut camera_entity, delta_translation, DQuat::IDENTITY);
             } else {
                 EditorCam::default_apply_delta(
@@ -185,13 +186,17 @@ impl Default for DollyZoom {
 impl DollyZoom {
     fn update(
         mut state: ResMut<Self>,
-        mut cameras: Query<(&Camera, &mut Projection, &mut Transform, &mut EditorCam)>,
+        mut camera_set: ParamSet<(
+            Query<(&Camera, &mut Projection, &mut EditorCam)>,
+            Query<EntityMut, With<EditorCam>>,
+        )>,
+        read_write: Option<Res<CustomReadWrite>>,
         mut redraw: EventWriter<RequestRedraw>,
     ) {
         let animation_duration = state.animation_duration;
         let animation_curve = state.animation_curve;
         for (
-            camera,
+            camera_entity,
             ZoomEntry {
                 perspective_start,
                 proj_end,
@@ -202,19 +207,20 @@ impl DollyZoom {
             },
         ) in state.map.iter_mut()
         {
-            let Ok((camera, mut projection, mut transform, mut controller)) =
-                cameras.get_mut(*camera)
+            let mut cameras = camera_set.p0();
+            let Ok((camera, mut projection, mut controller)) = cameras.get_mut(*camera_entity)
             else {
                 *complete = true;
                 continue;
             };
-
             let Projection::Perspective(last_perspective) = projection.clone() else {
                 *projection = proj_end.clone();
                 controller.enabled_motion = initial_enabled.clone();
                 *complete = true;
                 continue;
             };
+
+            let mut delta_translation = DVec3::ZERO;
 
             let last_fov = last_perspective.fov as f64;
             let fov_start = perspective_start.fov as f64;
@@ -234,9 +240,10 @@ impl DollyZoom {
             let last_dist = *triangle_base / (last_fov / 2.0).tan();
             let next_dist = *triangle_base / (next_fov / 2.0).tan();
             let forward_dist = last_dist - next_dist;
-            let next_translation = transform.forward().as_dvec3() * forward_dist;
+            let cam_forward = DVec3::NEG_Z;
+            let next_translation = cam_forward * forward_dist;
 
-            transform.translation += next_translation.as_vec3();
+            delta_translation += next_translation;
             controller.last_anchor_depth += forward_dist;
 
             if progress < 1.0 {
@@ -255,6 +262,19 @@ impl DollyZoom {
                 *complete = true;
             }
             redraw.write(RequestRedraw);
+
+            let mut camera_entities = camera_set.p1();
+            let mut camera_entity = camera_entities.get_mut(*camera_entity).unwrap();
+            if let Some(ref read_write) = read_write {
+                let CustomReadWrite((_, apply_delta)) = &**read_write;
+                apply_delta(&mut camera_entity, delta_translation, DQuat::IDENTITY);
+            } else {
+                EditorCam::default_apply_delta(
+                    &mut camera_entity,
+                    delta_translation,
+                    DQuat::IDENTITY,
+                );
+            }
         }
         state.map.retain(|_, v| !v.complete);
     }

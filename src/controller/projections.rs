@@ -1,6 +1,8 @@
 //! Configurable options for the challenge of working with orthographic cameras.
 
 use bevy_ecs::prelude::*;
+use bevy_math::{DQuat, DVec3};
+use bevy_platform::collections::HashMap;
 use bevy_reflect::prelude::*;
 use bevy_render::prelude::*;
 use bevy_transform::prelude::*;
@@ -89,8 +91,16 @@ impl Default for OrthographicSettings {
 }
 
 /// Update the ortho camera projection and position based on the [`OrthographicSettings`].
-pub fn update_orthographic(mut cameras: Query<(&mut EditorCam, &mut Projection, &mut Transform)>) {
-    for (mut editor_cam, mut projection, mut cam_transform) in cameras.iter_mut() {
+pub fn update_orthographic(
+    mut camera_set: ParamSet<(
+        Query<(Entity, &mut EditorCam, &mut Projection)>,
+        Query<EntityMut, With<EditorCam>>,
+    )>,
+    read_write: Option<Res<CustomReadWrite>>,
+) {
+    let mut transform_deltas = HashMap::new();
+    for (entity, mut editor_cam, mut projection) in camera_set.p0().iter_mut() {
+        let mut delta_translation = DVec3::ZERO;
         let Projection::Orthographic(ref mut orthographic) = *projection else {
             continue;
         };
@@ -102,9 +112,10 @@ pub fn update_orthographic(mut cameras: Query<(&mut EditorCam, &mut Projection, 
         );
 
         let forward_amount = anchor_dist - target_dist;
-        let movement = cam_transform.forward() * forward_amount;
+        let cam_forward = DVec3::NEG_Z;
+        let movement = cam_forward * forward_amount as f64;
 
-        cam_transform.translation += movement;
+        delta_translation += movement;
 
         editor_cam.last_anchor_depth += forward_amount as f64;
         if let CurrentMotion::UserControlled { ref mut anchor, .. } = editor_cam.current_motion {
@@ -112,6 +123,21 @@ pub fn update_orthographic(mut cameras: Query<(&mut EditorCam, &mut Projection, 
         }
 
         orthographic.near = 0.0;
-        orthographic.far = anchor_dist * (1.0 + editor_cam.orthographic.far_clip_multiplier);
+        orthographic.far = anchor_dist * (1.0 + editor_cam.orthographic.far_clip_multiplier) as f32;
+        transform_deltas.insert(entity, (delta_translation, DQuat::IDENTITY));
+    }
+    for mut entity_mut in camera_set.p1() {
+        if let Some((delta_translation, delta_rotation)) = transform_deltas.get(&entity_mut.id()) {
+            if let Some(ref read_write) = read_write {
+                let CustomReadWrite((_, apply_delta)) = &**read_write;
+                apply_delta(&mut entity_mut, *delta_translation, *delta_rotation);
+            } else {
+                EditorCam::default_apply_delta(
+                    &mut entity_mut,
+                    *delta_translation,
+                    *delta_rotation,
+                );
+            }
+        }
     }
 }

@@ -84,7 +84,12 @@ pub struct EditorCam {
 /// Optional resource that holds a function for how ['EditorCam'] applies its transform changes.
 /// The intended usage is for situations where a different transform system than Bevy's ['Transform'] component is being used
 /// When this resource is not present, the behavior falls back to a default that uses Bevy's ['Transform'].
-pub struct CustomApplyDelta(pub Box<dyn Fn(&mut EntityMut, DVec3, DQuat) + Send + Sync>);
+pub struct CustomReadWrite(
+    pub  (
+        Box<dyn Fn(&EntityRef) -> (DVec3, DQuat) + Send + Sync>,
+        Box<dyn Fn(&mut EntityMut, DVec3, DQuat) + Send + Sync>,
+    ),
+);
 impl Default for EditorCam {
     fn default() -> Self {
         EditorCam {
@@ -310,7 +315,7 @@ impl EditorCam {
             Query<(Entity, &mut EditorCam, &Camera, &mut Projection)>,
             Query<EntityMut, With<EditorCam>>,
         )>,
-        apply_delta: Option<Res<CustomApplyDelta>>,
+        read_write: Option<Res<CustomReadWrite>>,
         mut event: EventWriter<RequestRedraw>,
         time: Res<Time>,
     ) {
@@ -329,7 +334,8 @@ impl EditorCam {
             if let Some((delta_translation, delta_rotation)) =
                 transform_deltas.get(&entity_mut.id())
             {
-                if let Some(ref apply_delta) = apply_delta {
+                if let Some(ref read_write) = read_write {
+                    let CustomReadWrite((_, apply_delta)) = &**read_write;
                     apply_delta(&mut entity_mut, *delta_translation, *delta_rotation);
                 } else {
                     Self::default_apply_delta(&mut entity_mut, *delta_translation, *delta_rotation);
