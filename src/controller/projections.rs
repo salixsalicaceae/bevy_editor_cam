@@ -122,7 +122,7 @@ pub fn update_orthographic(
         }
 
         orthographic.near = 0.0;
-        orthographic.far = anchor_dist * (1.0 + editor_cam.orthographic.far_clip_multiplier) as f32;
+        orthographic.far = anchor_dist * (1.0 + editor_cam.orthographic.far_clip_multiplier);
         transform_deltas.insert(entity, (delta_translation, DQuat::IDENTITY));
     }
     for mut entity_mut in camera_set.p1() {

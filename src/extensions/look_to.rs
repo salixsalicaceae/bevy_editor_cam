@@ -1,14 +1,13 @@
 //! A `bevy_editor_cam` extension that adds the ability to smoothly rotate the camera about its
 //! anchor point until it is looking in the specified direction.
 
-use std::{f32::consts::PI, time::Duration};
+use std::{f64::consts::PI, time::Duration};
 
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
-use bevy_math::{prelude::*, DAffine3, DQuat, DVec3};
+use bevy_math::{prelude::*, DAffine3, DMat3, DQuat, DVec3};
 use bevy_platform::{collections::HashMap, time::Instant};
 use bevy_reflect::prelude::*;
-use bevy_transform::prelude::*;
 use bevy_window::RequestRedraw;
 
 use crate::prelude::*;
@@ -35,9 +34,9 @@ impl Plugin for LookToPlugin {
 #[derive(Debug, Event)]
 pub struct LookToTrigger {
     /// The new direction to face.
-    pub target_facing_direction: Dir3,
+    pub target_facing_direction: DVec3,
     /// The camera's "up" direction when finished moving.
-    pub target_up_direction: Dir3,
+    pub target_up_direction: DVec3,
     /// The camera to update.
     pub camera: Entity,
 }
@@ -50,12 +49,12 @@ impl LookToTrigger {
     /// the facing direction is parallel to the fixed up direction, the up direction will be
     /// automatically selected by choosing the axis that results in the least amount of rotation.
     pub fn auto_snap_up_direction(
-        facing: Dir3,
+        facing: DVec3,
         cam_entity: Entity,
         cam_rotation: &DQuat,
         cam_editor: &EditorCam,
     ) -> Self {
-        const EPSILON: f32 = 0.01;
+        const EPSILON: f64 = 0.01;
         let constraint = match cam_editor.orbit_constraint {
             OrbitConstraint::Fixed { up, .. } => Some(up),
             OrbitConstraint::Free => None,
@@ -65,28 +64,39 @@ impl LookToTrigger {
             angle > EPSILON && angle < PI - EPSILON
         });
 
+        let looking_to = |direction: DVec3, up: DVec3| -> DQuat {
+            // Following lines are f64 versions of Transform::look_to
+            let back = -direction;
+            let right = up
+                .cross(back)
+                .try_normalize()
+                .unwrap_or_else(|| up.any_orthogonal_vector());
+            let up = back.cross(right);
+            DQuat::from_mat3(&DMat3::from_cols(right, up, back))
+        };
+
         let up = constraint.unwrap_or_else(|| {
-            let current = cam_rotation.as_quat();
+            let current = cam_rotation;
             let options = [
-                Vec3::X,
-                Vec3::NEG_X,
-                Vec3::Y,
-                Vec3::NEG_Y,
-                Vec3::Z,
-                Vec3::NEG_Z,
+                DVec3::X,
+                DVec3::NEG_X,
+                DVec3::Y,
+                DVec3::NEG_Y,
+                DVec3::Z,
+                DVec3::NEG_Z,
             ];
             *options
                 .iter()
-                .map(|d| (d, Transform::default().looking_to(*facing, *d).rotation))
-                .map(|(d, rot)| (d, rot.angle_between(current).abs()))
+                .map(|d| (d, looking_to(facing, *d)))
+                .map(|(d, rot)| (d, rot.angle_between(*current).abs()))
                 .reduce(|acc, this| if this.1 < acc.1 { this } else { acc })
                 .map(|nearest| nearest.0)
-                .unwrap_or(&Vec3::Y)
+                .unwrap_or(&DVec3::Y)
         });
 
         LookToTrigger {
             target_facing_direction: facing,
-            target_up_direction: Dir3::new_unchecked(up.normalize()),
+            target_up_direction: up.normalize(),
             camera: cam_entity,
         }
     }
@@ -120,8 +130,8 @@ impl LookToTrigger {
                 continue;
             };
             redraw.write(RequestRedraw);
-            let camera_forward = Dir3::new_unchecked((camera_rotation * DVec3::NEG_Z).as_vec3());
-            let camera_up = Dir3::new_unchecked((camera_rotation * DVec3::Y).as_vec3());
+            let camera_forward = camera_rotation * DVec3::NEG_Z;
+            let camera_up = camera_rotation * DVec3::Y;
             state
                 .map
                 .entry(event.camera)
@@ -150,10 +160,10 @@ impl LookToTrigger {
 
 struct LookToEntry {
     start: Instant,
-    initial_facing_direction: Dir3,
-    initial_up_direction: Dir3,
-    target_facing_direction: Dir3,
-    target_up_direction: Dir3,
+    initial_facing_direction: DVec3,
+    initial_up_direction: DVec3,
+    target_facing_direction: DVec3,
+    target_up_direction: DVec3,
     complete: bool,
 }
 
@@ -248,16 +258,23 @@ impl LookTo {
                 r * anchor_view_space + t
             };
 
-            let rot_init = Transform::default()
-                .looking_to(**initial_facing_direction, **initial_up_direction)
-                .rotation;
-            let rot_target = Transform::default()
-                .looking_to(**target_facing_direction, **target_up_direction)
-                .rotation;
+            let looking_to = |direction: DVec3, up: DVec3| -> DQuat {
+                // Following lines are f64 versions of Transform::look_to
+                let back = -direction;
+                let right = up
+                    .cross(back)
+                    .try_normalize()
+                    .unwrap_or_else(|| up.any_orthogonal_vector());
+                let up = back.cross(right);
+                DQuat::from_mat3(&DMat3::from_cols(right, up, back))
+            };
 
-            let rot_next = rot_init.slerp(rot_target, progress);
+            let rot_init = looking_to(*initial_facing_direction, *initial_up_direction);
+            let rot_target = looking_to(*target_facing_direction, *target_up_direction);
+
+            let rot_next = rot_init.slerp(rot_target, progress as f64);
             let rot_last = camera_rotation;
-            let rot_delta = rot_next * rot_last.inverse().as_quat();
+            let rot_delta = rot_next * rot_last.inverse();
 
             let original_translation = camera_translation;
             let original_rotation = camera_rotation;
@@ -265,7 +282,7 @@ impl LookTo {
                 &mut camera_translation,
                 &mut camera_rotation,
                 anchor_world,
-                rot_delta.as_dquat(),
+                rot_delta,
             );
             let (_, delta_rotation, delta_translation) = {
                 let original =

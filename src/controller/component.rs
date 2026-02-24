@@ -122,7 +122,7 @@ impl EditorCam {
             smoothing: smoothness,
             sensitivity,
             momentum,
-            last_anchor_depth: initial_anchor_depth.abs() * -1.0, // ensure depth is correct sign
+            last_anchor_depth: -initial_anchor_depth.abs(), // ensure depth is correct sign
             ..Default::default()
         }
     }
@@ -130,7 +130,7 @@ impl EditorCam {
     /// Set the initial anchor depth of the camera controller.
     pub fn with_initial_anchor_depth(self, initial_anchor_depth: f64) -> Self {
         Self {
-            last_anchor_depth: initial_anchor_depth.abs() * -1.0, // ensure depth is correct sign
+            last_anchor_depth: -initial_anchor_depth.abs(), // ensure depth is correct sign
             ..self
         }
     }
@@ -150,7 +150,7 @@ impl EditorCam {
     /// again, but has no hit to anchor onto, the anchor doesn't suddenly change distance, which is
     /// what would happen if we used a fixed value.
     fn maybe_update_anchor(&mut self, anchor: Option<DVec3>) -> DVec3 {
-        let anchor = anchor.unwrap_or(DVec3::new(0.0, 0.0, self.last_anchor_depth.abs() * -1.0));
+        let anchor = anchor.unwrap_or(DVec3::new(0.0, 0.0, -self.last_anchor_depth.abs()));
         self.last_anchor_depth = anchor.z;
         anchor
     }
@@ -541,8 +541,8 @@ impl EditorCam {
                     let epsilon = 1e-3;
                     let motion_threshold = 1e-5;
                     let cam_forward = delta_rotation * DVec3::NEG_Z;
-                    let angle_to_bdc = cam_forward.angle_between(up.as_dvec3());
-                    let angle_to_tdc = cam_forward.angle_between(-up.as_dvec3());
+                    let angle_to_bdc = cam_forward.angle_between(up);
+                    let angle_to_tdc = cam_forward.angle_between(-up);
                     let pitch_angle = {
                         let desired_rotation = orbit.y * orbit_multiplier;
                         if can_pass_tdc {
@@ -564,7 +564,7 @@ impl EditorCam {
                     let yaw = if yaw_angle.abs() <= motion_threshold {
                         DQuat::IDENTITY
                     } else {
-                        DQuat::from_axis_angle(up.as_dvec3(), yaw_angle)
+                        DQuat::from_axis_angle(up, yaw_angle)
                     };
 
                     match [pitch == DQuat::IDENTITY, yaw == DQuat::IDENTITY] {
@@ -589,12 +589,12 @@ impl EditorCam {
                         ),
                     };
                     let cam_up = delta_rotation * DVec3::Y;
-                    let how_upright = cam_up.angle_between(up.as_dvec3()).abs() as f32;
+                    let how_upright = cam_up.angle_between(up).abs() as f32;
                     // Orient the camera so up always points up (roll).
                     if how_upright > epsilon && how_upright < FRAC_PI_2 - epsilon {
-                        look_to(&mut delta_rotation, cam_forward, up.as_dvec3());
+                        look_to(&mut delta_rotation, cam_forward, up);
                     } else if how_upright > FRAC_PI_2 + epsilon && how_upright < PI - epsilon {
-                        look_to(&mut delta_rotation, cam_forward, -up.as_dvec3());
+                        look_to(&mut delta_rotation, cam_forward, -up);
                     }
                 }
                 OrbitConstraint::Free => {
@@ -629,7 +629,7 @@ impl EditorCam {
 
     /// The last known anchor depth. This value will always be negative.
     pub fn last_anchor_depth(&self) -> f64 {
-        self.last_anchor_depth.abs() * -1.0
+        -self.last_anchor_depth.abs()
     }
 
     /// Default fallback for applying transform deltas onto the [`EditorCam`]'s entity.
@@ -667,7 +667,7 @@ pub enum OrbitConstraint {
     /// The camera's up direction is fixed.
     Fixed {
         /// The camera's up direction must always be parallel with this unit vector.
-        up: Vec3,
+        up: DVec3,
         /// Should the camera be allowed to pass over top dead center (TDC), making the camera
         /// upside down compared to the up direction?
         can_pass_tdc: bool,
@@ -679,7 +679,7 @@ pub enum OrbitConstraint {
 impl Default for OrbitConstraint {
     fn default() -> Self {
         Self::Fixed {
-            up: Vec3::Y,
+            up: DVec3::Y,
             can_pass_tdc: false,
         }
     }

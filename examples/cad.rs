@@ -13,6 +13,7 @@ use bevy_editor_cam::{
     extensions::{dolly_zoom::DollyZoomTrigger, look_to::LookToTrigger},
     prelude::*,
 };
+use bevy_math::DVec3;
 
 fn main() {
     App::new()
@@ -114,12 +115,12 @@ fn toggle_constraint(
             OrbitConstraint::Fixed { .. } => editor.orbit_constraint = OrbitConstraint::Free,
             OrbitConstraint::Free => {
                 editor.orbit_constraint = OrbitConstraint::Fixed {
-                    up: Vec3::Y,
+                    up: DVec3::Y,
                     can_pass_tdc: false,
                 };
 
                 look_to.write(LookToTrigger::auto_snap_up_direction(
-                    transform.forward(),
+                    transform.forward().as_dvec3(),
                     entity,
                     &transform.rotation.as_dquat(),
                     editor.as_ref(),
@@ -137,7 +138,7 @@ fn switch_direction(
     let (camera, transform, editor) = cam.single().unwrap();
     if keys.just_pressed(KeyCode::Digit1) {
         look_to.write(LookToTrigger::auto_snap_up_direction(
-            Dir3::X,
+            DVec3::X,
             camera,
             &transform.rotation.as_dquat(),
             editor,
@@ -145,7 +146,7 @@ fn switch_direction(
     }
     if keys.just_pressed(KeyCode::Digit2) {
         look_to.write(LookToTrigger::auto_snap_up_direction(
-            Dir3::Z,
+            DVec3::Z,
             camera,
             &transform.rotation.as_dquat(),
             editor,
@@ -153,7 +154,7 @@ fn switch_direction(
     }
     if keys.just_pressed(KeyCode::Digit3) {
         look_to.write(LookToTrigger::auto_snap_up_direction(
-            Dir3::NEG_X,
+            DVec3::NEG_X,
             camera,
             &transform.rotation.as_dquat(),
             editor,
@@ -161,7 +162,7 @@ fn switch_direction(
     }
     if keys.just_pressed(KeyCode::Digit4) {
         look_to.write(LookToTrigger::auto_snap_up_direction(
-            Dir3::NEG_Z,
+            DVec3::NEG_Z,
             camera,
             &transform.rotation.as_dquat(),
             editor,
@@ -169,7 +170,7 @@ fn switch_direction(
     }
     if keys.just_pressed(KeyCode::Digit5) {
         look_to.write(LookToTrigger::auto_snap_up_direction(
-            Dir3::Y,
+            DVec3::Y,
             camera,
             &transform.rotation.as_dquat(),
             editor,
@@ -177,7 +178,7 @@ fn switch_direction(
     }
     if keys.just_pressed(KeyCode::Digit6) {
         look_to.write(LookToTrigger::auto_snap_up_direction(
-            Dir3::NEG_Y,
+            DVec3::NEG_Y,
             camera,
             &transform.rotation.as_dquat(),
             editor,

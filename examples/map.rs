@@ -1,5 +1,6 @@
 use bevy::{color::palettes, prelude::*};
 use bevy_editor_cam::{extensions::dolly_zoom::DollyZoomTrigger, prelude::*};
+use bevy_math::DVec3;
 use rand::Rng;
 
 fn main() {
@@ -39,7 +40,7 @@ fn setup(
         },
         EditorCam {
             orbit_constraint: OrbitConstraint::Fixed {
-                up: Vec3::Y,
+                up: DVec3::Y,
                 can_pass_tdc: false,
             },
             last_anchor_depth: -translation.length() as f64,
