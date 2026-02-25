@@ -2,7 +2,6 @@
 
 use bevy_ecs::prelude::*;
 use bevy_math::{DQuat, DVec3};
-use bevy_platform::collections::HashMap;
 use bevy_reflect::prelude::*;
 use bevy_render::prelude::*;
 
@@ -97,42 +96,50 @@ pub fn update_orthographic(
     )>,
     read_write: Option<Res<CustomReadWrite>>,
 ) {
-    let mut transform_deltas = HashMap::new();
-    for (entity, mut editor_cam, mut projection) in camera_set.p0().iter_mut() {
-        let mut delta_translation = DVec3::ZERO;
-        let Projection::Orthographic(ref mut orthographic) = *projection else {
-            continue;
-        };
+    camera_set
+        .p0()
+        .iter_mut()
+        .filter_map(|(entity, mut editor_cam, mut projection)| {
+            if let Projection::Orthographic(ref mut orthographic) = *projection {
+                let mut delta_translation = DVec3::ZERO;
+                let anchor_dist = editor_cam.last_anchor_depth().abs() as f32;
+                let target_dist = (editor_cam.orthographic.scale_to_near_clip * orthographic.scale)
+                    .clamp(
+                        editor_cam.orthographic.near_clip_limits.start,
+                        editor_cam.orthographic.near_clip_limits.end,
+                    );
 
-        let anchor_dist = editor_cam.last_anchor_depth().abs() as f32;
-        let target_dist = (editor_cam.orthographic.scale_to_near_clip * orthographic.scale).clamp(
-            editor_cam.orthographic.near_clip_limits.start,
-            editor_cam.orthographic.near_clip_limits.end,
-        );
+                let forward_amount = anchor_dist - target_dist;
+                let cam_forward = DVec3::NEG_Z;
+                let movement = cam_forward * forward_amount as f64;
 
-        let forward_amount = anchor_dist - target_dist;
-        let cam_forward = DVec3::NEG_Z;
-        let movement = cam_forward * forward_amount as f64;
+                delta_translation += movement;
 
-        delta_translation += movement;
+                editor_cam.last_anchor_depth += forward_amount as f64;
+                if let CurrentMotion::UserControlled { ref mut anchor, .. } =
+                    editor_cam.current_motion
+                {
+                    anchor.z += forward_amount as f64;
+                }
 
-        editor_cam.last_anchor_depth += forward_amount as f64;
-        if let CurrentMotion::UserControlled { ref mut anchor, .. } = editor_cam.current_motion {
-            anchor.z += forward_amount as f64;
-        }
-
-        orthographic.near = 0.0;
-        orthographic.far = anchor_dist * (1.0 + editor_cam.orthographic.far_clip_multiplier);
-        transform_deltas.insert(entity, (delta_translation, DQuat::IDENTITY));
-    }
-    for mut entity_mut in camera_set.p1() {
-        if let Some((delta_translation, delta_rotation)) = transform_deltas.get(&entity_mut.id()) {
-            EditorCam::apply_delta(
-                &mut entity_mut,
-                delta_translation,
-                delta_rotation,
-                &read_write,
-            );
-        }
-    }
+                orthographic.near = 0.0;
+                orthographic.far =
+                    anchor_dist * (1.0 + editor_cam.orthographic.far_clip_multiplier);
+                Some((entity, delta_translation))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>()
+        .iter()
+        .for_each(|(entity, delta_translation)| {
+            if let Ok(mut entity_mut) = camera_set.p1().get_mut(*entity) {
+                EditorCam::apply_delta(
+                    &mut entity_mut,
+                    delta_translation,
+                    &DQuat::IDENTITY,
+                    &read_write,
+                );
+            }
+        });
 }
