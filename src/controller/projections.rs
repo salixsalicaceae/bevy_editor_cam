@@ -127,16 +127,12 @@ pub fn update_orthographic(
     }
     for mut entity_mut in camera_set.p1() {
         if let Some((delta_translation, delta_rotation)) = transform_deltas.get(&entity_mut.id()) {
-            if let Some(ref read_write) = read_write {
-                let CustomReadWrite { apply_delta, .. } = &**read_write;
-                apply_delta(&mut entity_mut, *delta_translation, *delta_rotation);
-            } else {
-                EditorCam::default_apply_delta(
-                    &mut entity_mut,
-                    *delta_translation,
-                    *delta_rotation,
-                );
-            }
+            EditorCam::apply_delta(
+                &mut entity_mut,
+                delta_translation,
+                delta_rotation,
+                &read_write,
+            );
         }
     }
 }

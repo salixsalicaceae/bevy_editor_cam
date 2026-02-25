@@ -137,12 +137,12 @@ impl DollyZoomTrigger {
 
             let mut camera_muts = camera_set.p1();
             let mut camera_mut = camera_muts.get_mut(event.camera).unwrap();
-            if let Some(ref read_write) = read_write {
-                let CustomReadWrite { apply_delta, .. } = &**read_write;
-                apply_delta(&mut camera_mut, delta_translation, DQuat::IDENTITY);
-            } else {
-                EditorCam::default_apply_delta(&mut camera_mut, delta_translation, DQuat::IDENTITY);
-            }
+            EditorCam::apply_delta(
+                &mut camera_mut,
+                &delta_translation,
+                &DQuat::IDENTITY,
+                &read_write,
+            );
         }
     }
 }
@@ -260,12 +260,12 @@ impl DollyZoom {
 
             let mut camera_muts = camera_set.p1();
             let mut camera_mut = camera_muts.get_mut(*camera_entity).unwrap();
-            if let Some(ref read_write) = read_write {
-                let CustomReadWrite { apply_delta, .. } = &**read_write;
-                apply_delta(&mut camera_mut, delta_translation, DQuat::IDENTITY);
-            } else {
-                EditorCam::default_apply_delta(&mut camera_mut, delta_translation, DQuat::IDENTITY);
-            }
+            EditorCam::apply_delta(
+                &mut camera_mut,
+                &delta_translation,
+                &DQuat::IDENTITY,
+                &read_write,
+            );
         }
         state.map.retain(|_, v| !v.complete);
     }

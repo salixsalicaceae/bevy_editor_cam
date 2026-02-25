@@ -7,7 +7,7 @@ use std::{
 
 use bevy_ecs::prelude::*;
 use bevy_log::prelude::*;
-use bevy_math::{prelude::*, DMat3, DMat4, DQuat, DVec2, DVec3};
+use bevy_math::{prelude::*, DAffine3, DMat3, DMat4, DQuat, DVec2, DVec3};
 use bevy_platform::{collections::HashMap, time::Instant};
 use bevy_reflect::prelude::*;
 use bevy_render::prelude::*;
@@ -86,9 +86,9 @@ pub struct EditorCam {
 #[derive(Resource)]
 pub struct CustomReadWrite {
     /// Function for reading transform info from an entity.
-    pub read_transform: Box<dyn Fn(&EntityRef) -> Option<(DVec3, DQuat)> + Send + Sync>,
+    pub custom_read_transform: Box<dyn Fn(&EntityRef) -> Option<(DVec3, DQuat)> + Send + Sync>,
     /// Function for applying a delta to an entity's transform.
-    pub apply_delta: Box<dyn Fn(&mut EntityMut, DVec3, DQuat) + Send + Sync>,
+    pub custom_apply_delta: Box<dyn Fn(&mut EntityMut, DVec3, DQuat) + Send + Sync>,
 }
 impl Default for EditorCam {
     fn default() -> Self {
@@ -314,32 +314,65 @@ impl EditorCam {
         mut camera_set: ParamSet<(
             Query<(Entity, &mut EditorCam, &Camera, &mut Projection)>,
             Query<EntityMut, With<EditorCam>>,
+            Query<EntityRef, With<EditorCam>>,
         )>,
         read_write: Option<Res<CustomReadWrite>>,
         mut event: EventWriter<RequestRedraw>,
         time: Res<Time>,
     ) {
+        let original_transforms = camera_set
+            .p2()
+            .iter()
+            .filter_map(
+                |entity_ref| match EditorCam::read_transform(&entity_ref, &read_write) {
+                    Some((translation, rotation)) => {
+                        Some((entity_ref.id(), (translation, rotation)))
+                    }
+                    None => None,
+                },
+            )
+            .collect::<HashMap<Entity, (DVec3, DQuat)>>();
         let mut transform_deltas = HashMap::new();
         for (entity, mut camera_controller, camera, ref mut projection) in
             camera_set.p0().iter_mut()
         {
             let dt = time.delta();
-            if let Some(delta) = camera_controller
-                .update_transform_and_projection(camera, projection, &mut event, dt)
+            if let Some((original_translation, original_rotation)) =
+                original_transforms.get(&entity)
             {
-                transform_deltas.insert(entity, delta);
+                if let Some((new_translation, new_rotation)) = camera_controller
+                    .update_transform_and_projection(
+                        camera,
+                        original_translation,
+                        original_rotation,
+                        projection,
+                        &mut event,
+                        dt,
+                    )
+                {
+                    let (_, delta_rotation, delta_translation) = {
+                        let original = DAffine3::from_rotation_translation(
+                            *original_rotation,
+                            *original_translation,
+                        );
+                        let new =
+                            DAffine3::from_rotation_translation(new_rotation, new_translation);
+                        (original.inverse() * new).to_scale_rotation_translation()
+                    };
+                    transform_deltas.insert(entity, (delta_translation, delta_rotation));
+                };
             };
         }
         for mut entity_mut in camera_set.p1() {
             if let Some((delta_translation, delta_rotation)) =
                 transform_deltas.get(&entity_mut.id())
             {
-                if let Some(ref read_write) = read_write {
-                    let CustomReadWrite { apply_delta, .. } = &**read_write;
-                    apply_delta(&mut entity_mut, *delta_translation, *delta_rotation);
-                } else {
-                    Self::default_apply_delta(&mut entity_mut, *delta_translation, *delta_rotation);
-                }
+                EditorCam::apply_delta(
+                    &mut entity_mut,
+                    delta_translation,
+                    delta_rotation,
+                    &read_write,
+                );
             }
         }
     }
@@ -348,12 +381,14 @@ impl EditorCam {
     pub fn update_transform_and_projection(
         &mut self,
         camera: &Camera,
+        original_translation: &DVec3,
+        original_rotation: &DQuat,
         projection: &mut Projection,
         redraw: &mut EventWriter<RequestRedraw>,
         delta_time: Duration,
     ) -> Option<(DVec3, DQuat)> {
-        let mut delta_translation = DVec3::ZERO;
-        let mut delta_rotation = DQuat::IDENTITY;
+        let mut new_translation = *original_translation;
+        let mut new_rotation = *original_rotation;
         let (anchor, orbit, pan, zoom) = match &mut self.current_motion {
             CurrentMotion::Stationary => return None,
             CurrentMotion::Momentum {
@@ -501,16 +536,16 @@ impl EditorCam {
             *anchor += zoom_translation_view_space;
         }
 
-        delta_translation +=
-            delta_rotation * (pan_translation_view_space + zoom_translation_view_space);
+        new_translation +=
+            new_rotation * (pan_translation_view_space + zoom_translation_view_space);
 
         *anchor -= pan_translation_view_space + zoom_translation_view_space;
 
         let orbit = orbit * DVec2::new(-1.0, 1.0);
-        let anchor_world = DMat4::from_rotation_translation(delta_rotation, delta_translation)
+        let anchor_world = DMat4::from_rotation_translation(new_rotation, new_translation)
             .transform_point3(*anchor);
         let orbit_dir = orbit.normalize().extend(0.0);
-        let orbit_axis_world = delta_rotation
+        let orbit_axis_world = new_rotation
             .mul_vec3(orbit_dir.cross(DVec3::NEG_Z).normalize())
             .normalize();
 
@@ -540,7 +575,7 @@ impl EditorCam {
                 OrbitConstraint::Fixed { up, can_pass_tdc } => {
                     let epsilon = 1e-3;
                     let motion_threshold = 1e-5;
-                    let cam_forward = delta_rotation * DVec3::NEG_Z;
+                    let cam_forward = new_rotation * DVec3::NEG_Z;
                     let angle_to_bdc = cam_forward.angle_between(up);
                     let angle_to_tdc = cam_forward.angle_between(-up);
                     let pitch_angle = {
@@ -556,7 +591,7 @@ impl EditorCam {
                     let pitch = if pitch_angle.abs() <= motion_threshold {
                         DQuat::IDENTITY
                     } else {
-                        let cam_left = delta_rotation * DVec3::NEG_X;
+                        let cam_left = new_rotation * DVec3::NEG_X;
                         DQuat::from_axis_angle(cam_left, pitch_angle)
                     };
 
@@ -570,39 +605,39 @@ impl EditorCam {
                     match [pitch == DQuat::IDENTITY, yaw == DQuat::IDENTITY] {
                         [true, true] => (),
                         [true, false] => rotate_around(
-                            &mut delta_translation,
-                            &mut delta_rotation,
+                            &mut new_translation,
+                            &mut new_rotation,
                             anchor_world,
                             yaw,
                         ),
                         [false, true] => rotate_around(
-                            &mut delta_translation,
-                            &mut delta_rotation,
+                            &mut new_translation,
+                            &mut new_rotation,
                             anchor_world,
                             pitch,
                         ),
                         [false, false] => rotate_around(
-                            &mut delta_translation,
-                            &mut delta_rotation,
+                            &mut new_translation,
+                            &mut new_rotation,
                             anchor_world,
                             yaw * pitch,
                         ),
                     };
-                    let cam_up = delta_rotation * DVec3::Y;
+                    let cam_up = new_rotation * DVec3::Y;
                     let how_upright = cam_up.angle_between(up).abs() as f32;
                     // Orient the camera so up always points up (roll).
                     if how_upright > epsilon && how_upright < FRAC_PI_2 - epsilon {
-                        look_to(&mut delta_rotation, cam_forward, up);
+                        look_to(&mut new_rotation, cam_forward, up);
                     } else if how_upright > FRAC_PI_2 + epsilon && how_upright < PI - epsilon {
-                        look_to(&mut delta_rotation, cam_forward, -up);
+                        look_to(&mut new_rotation, cam_forward, -up);
                     }
                 }
                 OrbitConstraint::Free => {
                     let rotation =
                         DQuat::from_axis_angle(orbit_axis_world, orbit.length() * orbit_multiplier);
                     rotate_around(
-                        &mut delta_translation,
-                        &mut delta_rotation,
+                        &mut new_translation,
+                        &mut new_rotation,
                         anchor_world,
                         rotation,
                     );
@@ -611,7 +646,7 @@ impl EditorCam {
         }
 
         self.last_anchor_depth = anchor.z;
-        Some((delta_translation, delta_rotation))
+        Some((new_translation, new_rotation))
     }
 
     /// Compute the world space size of a pixel at the anchor.
@@ -632,9 +667,43 @@ impl EditorCam {
         -self.last_anchor_depth.abs()
     }
 
+    /// Applies a difference transform onto an entity, using a custom function if it is available via
+    /// ['CustomReadWrite'], or using a default if there isn't one available.
+    pub fn apply_delta(
+        entity: &mut EntityMut,
+        delta_translation: &DVec3,
+        delta_rotation: &DQuat,
+        read_write: &Option<Res<CustomReadWrite>>,
+    ) {
+        if let Some(ref read_write) = read_write {
+            let CustomReadWrite {
+                custom_apply_delta, ..
+            } = &**read_write;
+            custom_apply_delta(entity, *delta_translation, *delta_rotation);
+        } else {
+            Self::default_apply_delta(entity, *delta_translation, *delta_rotation);
+        }
+    }
+
+    /// Retrieves an entity's tranform information, using a custom function if it is available via
+    /// ['CustomReadWrite'], or using a default if there isn't one available.
+    pub fn read_transform(
+        entity: &EntityRef,
+        read_write: &Option<Res<CustomReadWrite>>,
+    ) -> Option<(DVec3, DQuat)> {
+        if let Some(ref read_write) = read_write {
+            let CustomReadWrite {
+                custom_read_transform: read_transform,
+                ..
+            } = &**read_write;
+            read_transform(entity)
+        } else {
+            Self::default_read_transform(entity)
+        }
+    }
     /// Default fallback for applying transform deltas onto the [`EditorCam`]'s entity.
     /// Uses Bevy's base ['Transform'] type.
-    pub fn default_apply_delta(
+    fn default_apply_delta(
         entity: &mut EntityMut,
         delta_translation: DVec3,
         delta_rotation: DQuat,
@@ -649,7 +718,7 @@ impl EditorCam {
     }
     /// Default fallback for reading transform information from the [`EditorCam`]'s entity.
     /// Uses Bevy's base ['Transform'] type.
-    pub fn default_read_transform(entity: &EntityRef) -> Option<(DVec3, DQuat)> {
+    fn default_read_transform(entity: &EntityRef) -> Option<(DVec3, DQuat)> {
         let Some(cam_transform) = entity.get::<Transform>() else {
             error!("Unable to retrieve Transform from EditorCam entity.");
             return None;

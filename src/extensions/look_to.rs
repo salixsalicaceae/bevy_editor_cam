@@ -112,17 +112,11 @@ impl LookToTrigger {
     ) {
         for event in events.read() {
             let camera_refs = camera_set.p1();
-            let Some((_, camera_rotation)) = (if let Ok(camera_ref) = camera_refs.get(event.camera)
-            {
-                if let Some(ref read_write) = read_write {
-                    let CustomReadWrite { read_transform, .. } = &**read_write;
-                    read_transform(&camera_ref)
-                } else {
-                    EditorCam::default_read_transform(&camera_ref)
-                }
-            } else {
-                None
-            }) else {
+            let Ok(camera_ref) = camera_refs.get(event.camera) else {
+                continue;
+            };
+            let Some((_, camera_rotation)) = EditorCam::read_transform(&camera_ref, &read_write)
+            else {
                 continue;
             };
             let mut cameras = camera_set.p0();
@@ -215,17 +209,11 @@ impl LookTo {
         ) in state.map.iter_mut()
         {
             let camera_refs = camera_set.p1();
+            let Ok(camera_ref) = camera_refs.get(*camera) else {
+                continue;
+            };
             let Some((mut camera_translation, mut camera_rotation)) =
-                (if let Ok(camera_ref) = camera_refs.get(*camera) {
-                    if let Some(ref read_write) = read_write {
-                        let CustomReadWrite { read_transform, .. } = &**read_write;
-                        read_transform(&camera_ref)
-                    } else {
-                        EditorCam::default_read_transform(&camera_ref)
-                    }
-                } else {
-                    None
-                })
+                EditorCam::read_transform(&camera_ref, &read_write)
             else {
                 continue;
             };
@@ -293,12 +281,12 @@ impl LookTo {
 
             let mut camera_muts = camera_set.p2();
             let mut camera_mut = camera_muts.get_mut(*camera).unwrap();
-            if let Some(ref read_write) = read_write {
-                let CustomReadWrite { apply_delta, .. } = &**read_write;
-                apply_delta(&mut camera_mut, delta_translation, delta_rotation);
-            } else {
-                EditorCam::default_apply_delta(&mut camera_mut, delta_translation, delta_rotation);
-            }
+            EditorCam::apply_delta(
+                &mut camera_mut,
+                &delta_translation,
+                &delta_rotation,
+                &read_write,
+            );
             if progress_t >= 1.0 {
                 *complete = true;
             }
