@@ -624,6 +624,7 @@ impl EditorCam {
                         ),
                     };
                     let cam_up = new_rotation * DVec3::Y;
+                    let cam_forward = new_rotation * DVec3::NEG_Z;
                     let how_upright = cam_up.angle_between(up).abs() as f32;
                     // Orient the camera so up always points up (roll).
                     if how_upright > epsilon && how_upright < FRAC_PI_2 - epsilon {
