@@ -324,21 +324,19 @@ impl EditorCam {
             .p0()
             .iter()
             .filter_map(|entity_ref| {
-                if let Some(transform) = EditorCam::read_transform(&entity_ref, &read_write) {
-                    Some((entity_ref.id(), transform))
-                } else {
-                    None
-                }
+                EditorCam::read_transform(&entity_ref, &read_write)
+                    .map(|transform| (entity_ref.id(), transform))
             })
             .collect::<Vec<_>>()
             .iter()
             .filter_map(|(entity, (original_translation, original_rotation))| {
-                if let Some((mut camera_controller, camera, ref mut projection)) =
-                    camera_set.p1().get_mut(*entity).ok()
-                {
-                    let dt = time.delta();
-                    if let Some((new_translation, new_rotation)) = camera_controller
-                        .update_transform_and_projection(
+                camera_set
+                    .p1()
+                    .get_mut(*entity)
+                    .ok()
+                    .map(|(mut camera_controller, camera, ref mut projection)| {
+                        let dt = time.delta();
+                        camera_controller.update_transform_and_projection(
                             camera,
                             original_translation,
                             original_rotation,
@@ -346,27 +344,13 @@ impl EditorCam {
                             &mut event,
                             dt,
                         )
-                    {
-                        let (_, delta_rotation, delta_translation) = {
-                            let original = DAffine3::from_rotation_translation(
-                                *original_rotation,
-                                *original_translation,
-                            );
-                            let new =
-                                DAffine3::from_rotation_translation(new_rotation, new_translation);
-                            (original.inverse() * new).to_scale_rotation_translation()
-                        };
-                        Some((entity.clone(), delta_translation, delta_rotation))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
+                    })
+                    .flatten()
+                    .map(|transform| (entity.clone(), transform))
             })
             .collect::<Vec<_>>()
             .iter()
-            .for_each(|(entity, delta_translation, delta_rotation)| {
+            .for_each(|(entity, (delta_translation, delta_rotation))| {
                 if let Ok(mut entity_mut) = camera_set.p2().get_mut(*entity) {
                     EditorCam::apply_delta(
                         &mut entity_mut,
@@ -649,7 +633,13 @@ impl EditorCam {
         }
 
         self.last_anchor_depth = anchor.z;
-        Some((new_translation, new_rotation))
+        let (_, delta_rotation, delta_translation) = {
+            let original =
+                DAffine3::from_rotation_translation(*original_rotation, *original_translation);
+            let new = DAffine3::from_rotation_translation(new_rotation, new_translation);
+            (original.inverse() * new).to_scale_rotation_translation()
+        };
+        Some((delta_translation, delta_rotation))
     }
 
     /// Compute the world space size of a pixel at the anchor.
