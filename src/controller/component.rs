@@ -6,7 +6,7 @@ use std::{
 };
 
 use bevy_camera::prelude::*;
-use bevy_ecs::prelude::*;
+use bevy_ecs::{prelude::*, resource::IsResource};
 use bevy_log::prelude::*;
 use bevy_math::{prelude::*, DAffine3, DMat3, DMat4, DQuat, DVec2, DVec3};
 use bevy_platform::time::Instant;
@@ -318,9 +318,9 @@ impl EditorCam {
     /// Called once every frame to compute motions and update the transforms of all [`EditorCam`]s
     pub fn update_camera_positions(
         mut camera_set: ParamSet<(
-            Query<EntityRef, With<EditorCam>>,
+            Query<EntityRef, (With<EditorCam>, Without<IsResource>)>,
             Query<(&mut EditorCam, &Camera, Mut<Projection>)>,
-            Query<EntityMut, With<EditorCam>>,
+            Query<EntityMut, (With<EditorCam>, Without<IsResource>)>,
         )>,
         transform_adapter: Res<TransformAdapter>,
         mut event: MessageWriter<RequestRedraw>,
